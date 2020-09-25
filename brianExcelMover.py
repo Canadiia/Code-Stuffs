@@ -136,8 +136,8 @@ try:
             tg.content = (
                 tg.content.replace("&quot;", '"')
                 .replace("&apos;", "'")
-                .replace("&gt;", "<")
-                .replace("&lt;", ">")
+                .replace("&gt;", ">")
+                .replace("&lt;", "<")
             )
 
         # load the correct amount of cells into memory
