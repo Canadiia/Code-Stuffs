@@ -8,7 +8,7 @@ from openpyxl.workbook.workbook import Workbook
 
 
 class Translation:
-    def __init__(self, source, translation, comments, identifier):
+    def __init__(self, source: str, translation: str, comments: str, identifier: int):
         self.source = source
         self.translation = translation
         self.comments = comments
@@ -18,20 +18,16 @@ class Translation:
 
 class tag:
     def __init__(
-        self,
-        tagStart: int,
-        typ: str,
-        index: int,
-        contentStart: int,
-        contentEnd: int,
-        content: str,
+        self, typ: str, content_start: int, content_end: int, content: str, index: int
     ):
-        self.tagStart = tagStart
         self.typ = typ
-        self.index = (index, tagStart)
-        self.contentStart = contentStart
-        self.contentEnd = contentEnd
+        self.content_start = content_start
+        self.content_end = content_end
         self.content = content
+        self.index = index
+
+    def __str__(self):
+        return self.content
 
 
 def get_args():
@@ -54,7 +50,7 @@ def get_args():
 
         # try to get them
         try:
-            opts, args = getopt.getopt(cmd_args, "hi:v")
+            opts, _ = getopt.getopt(cmd_args, "hi:v")
 
         # if we can't, show the usage and close
         except getopt.GetoptError:
@@ -93,34 +89,45 @@ def get_args():
     return excel_file, verification_mode
 
 
-def get_data(input_file):
-    data = []
+def get_data(filepath: str):
     try:
-        input_data = openpyxl.load_workbook(filename=input_file, read_only=True)
+        input_data = openpyxl.load_workbook(filename=filepath, read_only=True)
     except Exception as error:
         print(error)
         return
     length = input_data.active
-    for i in range(2, length.max_row + 1):
-        data.append(
-            Translation(
-                length["A{}".format(i)].value,
-                length["B{}".format(i)].value,
-                length["D{}".format(i)].value,
-                i,
-            )
+    data = [
+        Translation(
+            length["A{}".format(i)].value,
+            length["B{}".format(i)].value,
+            length["D{}".format(i)].value,
+            i,
         )
+        for i in range(2, length.max_row + 1)
+    ]
     input_data.close()
+    data.sort(key=lambda x: (x.source or "").lower())
     return data
 
 
-def get_translations(input_data):
-    return [i.translation for i in input_data if i.source != None]
+def get_translations(translation_class_list: list):
+    return [i.translation for i in translation_class_list if i.source != None]
 
 
-def cleanup_translations(input_data):
+def html_prep(input_string: str):
+    return (
+        input_string.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&apos;")
+        .replace("\xa0", "&nbsp;")
+    )
+
+
+def cleanup_translations(translation_class_list: list):
     holder = []
-    for translation in input_data:
+    for translation in translation_class_list:
         final_string = translation
 
         # search for any html tags
@@ -146,24 +153,24 @@ def cleanup_translations(input_data):
     return holder
 
 
-def translate_translations(input_data):
-    translations = Translator().translate(input_data, dest="english")
+def translate_translations(translations_list: list):
+    translations = Translator().translate(translations_list, dest="english")
     return [translation.text for translation in translations]
 
 
-def verification_file(input_data, language):
+def verification_file(translation_class_list: list, language: str):
     output_workbook = Workbook()
     output_workbook.title = "Verification Data"
     output_worksheet = output_workbook.active
     for x in range(1, 3):
-        for y in range(1, len(input_data) + 1):
+        for y in range(1, len(translation_class_list) + 1):
             output_worksheet.cell(row=x, column=y)
 
     output_worksheet["A1"] = "Source"
     output_worksheet["B1"] = "Translated Translation"
 
     index = 2
-    for translation in input_data:
+    for translation in translation_class_list:
         if translation.source != None:
             output_worksheet["A{}".format(index)] = translation.source
             output_worksheet["B{}".format(index)] = translation.verification_text
@@ -172,8 +179,131 @@ def verification_file(input_data, language):
     output_workbook.save("Verification_Data_{}.xlsx".format(language))
 
 
-def move_to_ts(input_data, language):
-    print("this is where I'd move the data to the TS file...\n\n\n\n\n\nIF I HAD ONE")
+def get_tag_locations(language: str):
+    extracted_tags = []
+    try:
+        # open the file
+        with open(
+            "exspiron2Xi_{}_{}.ts".format(language.lower(), language.upper()),
+            "r",
+            encoding="utf-8",
+        ) as input_file:
+
+            raw_data = open(
+                "exspiron2Xi_{}_{}.ts".format(language.lower(), language.upper()),
+                "r",
+                encoding="utf-8",
+            ).readlines()
+
+            # iterate through the lines of the file
+            for line_index, line in enumerate(input_file):
+
+                # find the specific tags
+                if "<source" in line or "<translation" in line:
+
+                    # set these up outside class definition for use in class definition
+                    content_start = line.find(">") + 1
+                    content_end = line.find("<", content_start)
+
+                    # check to see if we even need to do lookahead
+                    if "</source" not in line and "</translation" not in line:
+
+                        # if we do, setup a few lines of lookahead
+                        #! this looks 9 lines forward in the data array for the closeing tag,
+                        #! if the data you're translating is longer than that, change this variable
+                        lines_of_lookahead = 9
+
+                        lookahead = raw_data[
+                            line_index : line_index + lines_of_lookahead + 1
+                        ]
+
+                        # loop through the lookahead
+                        for line_ahead_number, line_ahead in enumerate(lookahead):
+
+                            # find the end tag
+                            if (
+                                "</source" in line_ahead
+                                or "</translation" in line_ahead
+                            ):
+
+                                # merge the range of lines and cut out the content
+                                content_range = "".join(
+                                    raw_data[
+                                        line_index : line_ahead_number + line_index + 1
+                                    ]
+                                )
+                                content_start = content_range.find(">") + 1
+                                content_end = content_range.find("<", content_start)
+                                content_range = content_range[content_start:content_end]
+                                break
+                    else:
+                        content_range = line[content_start:content_end]
+
+                    extracted_tags.append(
+                        tag(
+                            line[line.find("<") + 1 : line.find(">")],
+                            content_start,
+                            content_end,
+                            content_range,
+                            line_index,
+                        )
+                    )
+
+    except FileNotFoundError:
+        print(
+            'file was not found, Expected file in this directory to be named "exspiron2Xi_{}_{}"'.format(
+                language.lower(), language.upper()
+            )
+        )
+    extracted_tags = [
+        [tag, extracted_tags[index + 1]]
+        for index, tag in enumerate(extracted_tags)
+        if tag.typ == "source"
+    ]
+
+    extracted_tags.sort(key=lambda x: str(x[0]).lower())
+    return extracted_tags
+
+
+def put_data_into_file(translation_class_list, locations, language: str):
+    raw_data = open(
+        "exspiron2Xi_{}_{}.ts".format(language.lower(), language.upper()),
+        "r",
+        encoding="utf-8",
+    ).readlines()
+
+    for location in locations:
+        for translation in translation_class_list:
+            if translation.source == location[0].content:
+                location[1].content = translation.translation
+                del location[0]
+                break
+
+    holder = []
+    for location in locations:
+        for tag in location:
+            holder.append(tag)
+    locations = holder
+
+    for location in locations:
+        raw_data[location.index] = (
+            raw_data[location.index][: location.content_start]
+            + location.content
+            + raw_data[location.index][location.content_end :]
+        ).replace('translation type="unfinished"', "translation")
+
+    return raw_data
+
+
+def write_to_ts_file(input_list: list, language: str):
+    print("Transferring to the TS file...")
+    with open(
+        "exspiron2Xi_{}_{}.ts".format(language.lower(), language.upper()),
+        "w",
+        encoding="utf-8",
+    ) as input_file:
+        input_file.writelines(input_list)
+    print("Excel transfer Complete!")
 
 
 def main():
@@ -182,17 +312,17 @@ def main():
     excel_file, verification_mode = get_args()
 
     # explication
-    data = get_data(excel_file) if excel_file else None
+    translation_data = get_data(excel_file) if excel_file else None
     lang = excel_file[-7:-5]
 
     # explication
-    if data:
+    if translation_data:
 
         # explication
         if verification_mode:
 
             # explication
-            foreign_words = get_translations(data)
+            foreign_words = get_translations(translation_data)
 
             # explication
             foreign_words = cleanup_translations(foreign_words)
@@ -202,7 +332,7 @@ def main():
 
             # explication
             index = 0
-            for translation in data:
+            for translation in translation_data:
 
                 # explication
                 if translation.source != None:
@@ -210,10 +340,22 @@ def main():
                     index += 1
 
             # explication
-            verification_file(data, lang)
+            verification_file(translation_data, lang)
 
         # explication
-        move_to_ts(data, lang)
+        tag_locations = get_tag_locations(lang)
+
+        # explication
+        for index, translation in enumerate(translation_data):
+            if translation.translation:
+                translation.translation = html_prep(translation.translation)
+
+        # explanation
+        final_output = put_data_into_file(translation_data, tag_locations, lang)
+
+        write_to_ts_file(final_output, lang)
+
+        input()
 
 
 if __name__ == "__main__":
