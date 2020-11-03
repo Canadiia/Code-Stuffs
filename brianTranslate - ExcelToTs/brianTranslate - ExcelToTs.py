@@ -1,3 +1,7 @@
+    """this file the translated data from an excel file and moves it to it's respective place in a .ts file
+    TODO: DOCUMENTATION
+    """
+
 import getopt
 import re
 import sys
@@ -8,6 +12,8 @@ from openpyxl.workbook.workbook import Workbook
 
 
 class Translation:
+    """This holds the information gathered from the Excel file"""
+
     def __init__(self, source: str, translation: str, comments: str, identifier: int):
         self.source = source
         self.translation = translation
@@ -17,6 +23,8 @@ class Translation:
 
 
 class tag:
+    """This holds information gathered from the .ts file"""
+
     def __init__(
         self, typ: str, content_start: int, content_end: int, content: str, index: int
     ):
@@ -31,6 +39,14 @@ class tag:
 
 
 def get_args():
+    """This grabs the command line arguments parsed in alongside the file
+    TODO: make it work without command line args
+
+    Returns:
+        str, bool: excel_file is the filepath to the excel file,
+        verification_mode is a boolean that tells weather or not we want to output a verification file
+    """
+
     # see if we gave any command line arguments
     try:
         cmd_args = sys.argv[1:]
