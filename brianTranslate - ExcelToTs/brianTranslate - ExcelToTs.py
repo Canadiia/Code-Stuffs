@@ -1,155 +1,154 @@
-"""this file the translated data from an excel file and moves it
-to it's respective place in a .ts file
+#!/usr/bin/python3
+
+"""This script take translations from an excel file and put them into a Qt .ts file.
+See the `print_usage_message()` function for how to invoke this script.
+
+For the format that the Excel file needs to be in, see the `get_data` function.
 """
 
-import getopt
 import re
 import sys
-import xml.etree.ElementTree as xml
+from lxml import etree as xml
+from typing import List, NamedTuple, Optional
 
 import openpyxl
 from googletrans import Translator
 from openpyxl.workbook.workbook import Workbook
 
 
+class Arguments(NamedTuple):
+    """holds all the data extracted from the command line arguments passed in"""
+
+    excel_filepath: str
+    ts_filepath: str
+    verification: bool
+
+
 class Translation:
     """This holds the information gathered from the Excel file"""
 
-    def __init__(self, source: str, translation: str, comments: str, identifier: int):
-        self.source = source
+    def __init__(
+        self, english_source: str, translation: str, translator_comment: str
+    ) -> None:
+        self.english_source = english_source
         self.translation = translation
-        self.comments = comments
-        self.id = identifier
-        self.verification_text = ""
+        self.translator_comment = translator_comment
 
 
-def get_args() -> list:
+def get_args(raw_args: List[str]) -> Optional[Arguments]:
     """This grabs the command line arguments parsed in alongside the file
-    TODO: make it work without command line args
+
+    Args:
+        raw_args (List[str]): the raw args sent in when running the file
 
     Returns:
-        str, bool:
-        excel_file is the filepath to the excel file,
-        verification_mode is a boolean that tells weather or not
-        we want to output a verification file
+        Optional[Arguments]: returns an `Argument` class if there are arguments
+        or `None` if there was an issue
     """
 
     # see if we gave any command line arguments
-    cmd_args = None
-    try:
-        cmd_args = sys.argv[1:]
+    argc = len(sys.argv)
+    if argc < 3:
+        print("Not enough arguments.")
+        print_usage_message()
+        return None
 
-    # if there's an unexpected error, just print it
-    except Exception as error:
-        print(error)
+    # Validate them
+    if not raw_args[1].lower().endswith(".xlsx"):
+        print("First argument must be to an Excel file.")
+        print_usage_message()
+        return None
 
-    # if there are command line arguments,
-    verification_mode = False
-    excel_file = None
-    ts_file = None
-    if cmd_args:
+    if not raw_args[2].lower().endswith(".ts"):
+        print("Second argument must be to a Qt .ts XML file.")
+        print_usage_message()
+        return None
 
-        # try to get them
-        try:
-            opts, _ = getopt.getopt(cmd_args, "hvi:o:")
-
-        # if we can't, show the usage and close
-        except getopt.GetoptError:
-            print("<filename>.py -i <input_file_path> -o <output_file_path>")
-            print('optionally you can use "-v" to enable verification output')
-            sys.exit(2)
-
-        # after getting the arguments, loop through them all
-        for opt, arg in opts:
-
-            # if we have the "help" argument
-            #   explain the usage of the command line arguments
-            if opt == "-h":
-                print("usage: <filename>.py -i <input_file_path> -o <output_file_name>")
-                print('optionally you can use "-v" to enable verification output')
-                sys.exit()
-
-            # if we have the "input_file" argument,
-            #   set the correct filepath variable
-            elif opt == "-i":
-                excel_file = arg
-
-            # if we have the "output_file" argument,
-            #   set the correct filepath variable
-            elif opt == "-o":
-                ts_file = arg
-
-            # if we have the "verification" argument,
-            #   set the correct verification variable
-            elif opt == "-v":
-                verification_mode = True
-
-    # if there wasn't any command line arguments,
+    # handle if we just don't give a 3rd argument
+    if argc == 3:
+        return Arguments(
+            excel_filepath=raw_args[1],
+            ts_filepath=raw_args[2],
+            verification=False,
+        )
     else:
-        print("<filename>.py -i <input_file_path> -o <output_file_path>")
-        print('optionally you can use "-v" to enable verification output')
+        return Arguments(
+            excel_filepath=raw_args[1],
+            ts_filepath=raw_args[2],
+            verification=raw_args[3].lower() == "-v",
+        )
 
-    return [excel_file, ts_file, verification_mode]
+
+def print_usage_message() -> None:
+    """this prints out the usage of the file"""
+    print("Usage:")
+    print("  <filename>.py <translation_source>.xlsx <destination>.ts [-v]")
+    print("  the -v is optional and enable the output of a verification file")
 
 
-def get_data(filepath: str) -> list:
+def get_data(filepath: str) -> List[Translation]:
     """this will take in a filepath to an Excel file and grab the data from it
     and put it into a Translation class list
 
     Args:
-        filepath (str): This should be a filepath to an Excel file
+        filepath (str): the filepath to the Excel file
+
+    Raises:
+        Exception: this is raised if there data in one of the cells but not both
 
     Returns:
-        list: This will be the list of all the Translation classes that were
-        created, sorted alphabetically by their source text
+        List[Translation]: this will hold all of the translations gathered from the Excel file
     """
 
-    # try to load the Excel file located at the filepath provided
-    #   in read only mode
-    try:
-        input_data = openpyxl.load_workbook(filename=filepath, read_only=True)
-
-    # if that fails, print the error
-    except Exception as error:
-        print(error)
-        return
-
-    # get the current active Sheet in the Excel file
+    # load the Excel file located at the filepath provided in read only mode
+    # and get the current active Sheet in the Excel file
+    input_data = openpyxl.load_workbook(filename=filepath, read_only=True)
     active_sheet = input_data.active
 
-    # build the final datalist out of Translation classes in the format:
-    # Translation.source :=
-    #   the_currently_active_sheet[Column: A, Row: loop_index]
+    # create the empty data list
+    data = []
 
-    # Translation.translation :=
-    #   the_currently_active_sheet[Column: B, Row: loop_index]
+    # load the rows
+    max_rows = active_sheet.max_row + 1
+    rows = active_sheet["A3:D%i" % max_rows]
 
-    # Translation.comments :=
-    #   the_currently_active_sheet[Column: C, Row: loop_index]
+    # loop through the rows
+    for english_cell, translation_cell, _, comment_cell in rows:
+        english_source = english_cell.value
+        translation = translation_cell.value
+        translator_comment = comment_cell.value
 
-    # Translation.id :=
-    #   loop_index
-    # ! This never ends up being used but is stored for possible future use
-    data = [
-        Translation(
-            active_sheet["A{}".format(i)].value,
-            active_sheet["B{}".format(i)].value,
-            active_sheet["D{}".format(i)].value,
-            i,
-        )
-        for i in range(2, active_sheet.max_row + 1)
-    ]
+        if not english_source and not translation:
+            # if the cells are empty, we skip it
+            continue
+
+        elif english_source and translation:
+            # if we have data in both cells, add a `Translation` class to the
+            #   data list
+            data.append(
+                Translation(
+                    english_source,
+                    translation,
+                    translator_comment,
+                )
+            )
+
+        else:
+            # This is bad, one of them is None and the other has a value, ERROR
+            raise Exception(
+                (
+                    "Mismatching English and Translation; one cel is empty",
+                    english_source,
+                    translation,
+                )
+            )
 
     # close the Excel file as loading it in read only mode requires closing
     input_data.close()
-
-    # sort the Translation class list alphabetically by source text
-    data.sort(key=lambda x: (x.source or "").lower())
-
     return data
 
 
-def get_translations(translation_class_list: list) -> list:
+def get_translations(translation_class_list: List[Translation]) -> List[str]:
     """this takes in a list of Translation classes and returns a list
     containing just the "translation" variable from them
 
@@ -160,7 +159,7 @@ def get_translations(translation_class_list: list) -> list:
         list: A list containing just the "translation" variables
         from the original list
     """
-    return [i.translation for i in translation_class_list if i.source is not None]
+    return [i.translation for i in translation_class_list]
 
 
 def html_prep(input_string: str) -> str:
@@ -212,7 +211,7 @@ def cleanup_translation(input_string: str) -> str:
     return input_string
 
 
-def translate_translations(translations_list: list) -> list:
+def translate_translations(translations_list: List[str]) -> List[str]:
     """this takes in a list of strings to be translated and translates them
 
     Args:
@@ -225,7 +224,9 @@ def translate_translations(translations_list: list) -> list:
     return [translation.text for translation in translations]
 
 
-def verification_file(translation_class_list: list, language: str):
+def verification_file(
+    translation_class_list: List[Translation], translations: List[str], language: str
+) -> None:
     """this creates an Excel file for organization of the verification data
 
     Args:
@@ -249,18 +250,17 @@ def verification_file(translation_class_list: list, language: str):
 
     # put the data in the Excel file with the original source text in the
     #   A column and the translated translation in the B column
-    index = 2
-    for translation in translation_class_list:
-        if translation.source is not None:
-            output_worksheet["A{}".format(index)] = translation.source
-            output_worksheet["B{}".format(index)] = translation.verification_text
-            index += 1
+    max_rows = len(translation_class_list) + 1
+    rows = output_worksheet["A2:B%i" % max_rows]
+    for index, (english_source, translated_translation) in enumerate(rows):
+        english_source.value = translation_class_list[index].english_source
+        translated_translation.value = translations[index]
 
     # save the file
     output_workbook.save("Verification_Data_{}.xlsx".format(language))
 
 
-def write_to_ts_file(filepath: str, translation_class_list: list):
+def write_to_ts_file(filepath: str, translation_class_list: List[Translation]) -> None:
     """this takes the input .ts filepath and puts the Excell data
     into its coresponding location
 
@@ -270,79 +270,71 @@ def write_to_ts_file(filepath: str, translation_class_list: list):
     """
 
     # Load the .ts file and make a variable for it's root
-    input_file = xml.ElementTree(file=filepath)
-    input_file_root = input_file.getroot()
+    ts_xml = xml.parse(filepath)
+    all_source_tags = ts_xml.findall(".//source")
 
-    # loop through all the <message> tags and find the Translation class with
-    # the coresponding source text.
-    # Then put the translation into the <translation> tag
-    for message in input_file_root.iter("message"):
-        source = message.find("source")
-        for translation in translation_class_list:
-            if translation.source == source.text:
-                message.find("translation").text = translation.translation
-                break
+    # Go through each translation entry
+    for translation in translation_class_list:
+        # Find the <source> tags that have the matching english
+        matching_tags = filter(
+            lambda x: (x.text == translation.english_source), all_source_tags
+        )
+
+        # For each of the matching ones, edit the <translation> tag to use the translation
+        for tag in matching_tags:
+            message_tag = tag.getparent()
+            message_tag.find("translation").text = translation.translation
 
     # save the file
-    input_file.write(filepath)
+    ts_xml.write(filepath, pretty_print=True, xml_declaration=True, encoding="utf-8")
 
 
-def main():
+def main() -> None:
     """this is the main function that handles
     the ordering of the other functions"""
 
     # we first get the file path of the Excel file, .ts file, and
     #   wether or not we want a verification file
-    excel_file, ts_file, verification_mode = get_args()
+    args = get_args(sys.argv)
+    if not args:
+        print("Error; arguments incorrect. Exiting.", file=sys.stderr)
+        sys.exit(1)
 
     # next, we get a list of Translation classes containing
     #   the translations in the excel file.
     # we also get the current language from the end of the file
-    #   for use in locating the coresponding .ts file
-    translation_data = get_data(excel_file) if excel_file else None
-    lang = excel_file[-7:-5]
+    #   for use in naming a verification file if we're making one
+    translation_records = get_data(args.excel_filepath)
 
-    # next we see if that list even exists
-    if translation_data:
+    # if it does, first we see if the user wants a verification file
+    if args.verification:
 
-        # if it does, first we see if the user wants a verification file
-        if verification_mode:
+        # if they do, First we get all the translations from
+        #   the list of Translation classes
+        translations = get_translations(translation_records)
 
-            # if they do, First we get all the translations from
-            #   the list of Translation classes
-            foreign_words = get_translations(translation_data)
+        # next we strip out all the escape characters to make the process
+        #   of translating more accurate
+        translations = [
+            cleanup_translation(translation) for translation in translations
+        ]
 
-            # next we strip out all the escape characters to make the process
-            #   of translating more accurate
-            foreign_words = [
-                cleanup_translation(translation) for translation in foreign_words
-            ]
+        # now we translate the translations back to english
+        translations = translate_translations(translations)
 
-            # now we translate the translations back to english
-            foreign_words = translate_translations(foreign_words)
+        # Finally we write the data to a verification Excel file
+        language = args.excel_filepath[-7:-5]
+        verification_file(translation_records, translations, language)
 
-            # next we loop through the Translation class list and
-            #   add the translated translations into the class's
-            #   verification_text variable
-            index = 0
-            for translation in translation_data:
-                if translation.source is not None:
-                    translation.verification_text = foreign_words[index]
-                    index += 1
+    # next we need to make sure that the text fits within the constraints
+    #   of the .ts file
+    # we do this by replacing the symbols in the text to
+    #   HTML compliant ones
+    for translation in translation_records:
+        translation.translation = html_prep(translation.translation)
 
-            # Finally we write the data to a verification Excel file
-            verification_file(translation_data, lang)
-
-        # next we need to make sure that the text fits within the constraints
-        #   of the .ts file
-        # we do this by replacing the symbols in the text to
-        #   HTML compliant ones
-        for translation in translation_data:
-            if translation.translation:
-                translation.translation = html_prep(translation.translation)
-
-        # finally we write the data from the excel file to the .ts file
-        write_to_ts_file(ts_file, translation_data)
+    # finally we write the data from the excel file to the .ts file
+    write_to_ts_file(args.ts_filepath, translation_records)
 
 
 if __name__ == "__main__":
