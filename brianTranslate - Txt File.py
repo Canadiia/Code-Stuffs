@@ -109,7 +109,6 @@ formattedData[0] = translate(formattedData[0], desiredLang)
 # put the data into a txt file
 if not os.path.exists("Output.txt"):
     open("Output.txt", "x", encoding="utf-8").close()
-outputData = open("Output.txt", "w", encoding="utf-8")
-outputData.writelines(reformat(formattedData))
-outputData.close()
+with open("Output.txt", "w", encoding="utf-8") as outputData:
+    outputData.writelines(reformat(formattedData))
 input()
